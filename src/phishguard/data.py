@@ -1,9 +1,41 @@
 """Data loading, cleaning, URL extraction and splitting. Spec: specs/01-data.md."""
 from __future__ import annotations
 
+import html
+import re
 from pathlib import Path
 
 import pandas as pd
+
+# ---- DATA-01 patterns -------------------------------------------------------
+# <style>/<script> blocks hold CSS/JavaScript, not words a reader sees. Dropping their contents
+# keeps that code from filling DistilBERT's limited input window (max_length tokens).
+_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+# A real tag starts with a tag name: <p>, </b>, <br/>, <a href="...">, <o:p>, plus <!DOCTYPE ...>.
+# Requiring the name keeps plain-text forms like <http://x.com>, <john@x.com> and "<3" intact.
+_TAG_RE = re.compile(r"</?[A-Za-z][\w:-]*(?:\s[^>]*)?/?>|<![^>]*>")
+_WHITESPACE_RE = re.compile(r"\s+")  # also matches the non-breaking space that &nbsp; becomes
+
+# ---- DATA-02 patterns -------------------------------------------------------
+# A URL starts with http://, https:// or www. and runs until whitespace, a quote or an angle bracket
+# (so it stops at the end of an HTML attribute such as href="...").
+_URL_RE = re.compile(r"\b(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
+_URL_TRAILING = ".,;:!?)]}'\">"
+_URL_HAS_BODY_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+
+
+def _is_missing(value) -> bool:
+    """True for None, NaN and pandas NA."""
+    return value is None or (not isinstance(value, str) and pd.isna(value))
+
+
+def _clean_once(text: str) -> str:
+    text = _SCRIPT_STYLE_RE.sub(" ", text)
+    text = _COMMENT_RE.sub(" ", text)
+    text = _TAG_RE.sub(" ", text)  # tags first, then entities, so "&lt;3" becomes "<3", not a tag
+    text = html.unescape(text)
+    return _WHITESPACE_RE.sub(" ", text).strip()
 
 
 def clean_text(text) -> str:
@@ -11,7 +43,17 @@ def clean_text(text) -> str:
 
     None/NaN -> "". Case preserved. URLs left intact. Idempotent.
     """
-    raise NotImplementedError("DATA-01: see specs/01-data.md")
+    if _is_missing(text):
+        return ""
+    text = str(text)
+    # Repeat until nothing changes, so cleaning twice gives the same result as cleaning once,
+    # even for escaped markup such as "&lt;b&gt;" (which only becomes a tag after unescaping).
+    # Every pass that changes the text makes it shorter or only normalises whitespace, so this ends.
+    while True:
+        cleaned = _clean_once(text)
+        if cleaned == text:
+            return cleaned
+        text = cleaned
 
 
 def extract_urls(text) -> list[str]:
@@ -20,7 +62,14 @@ def extract_urls(text) -> list[str]:
     Finds URLs inside HTML attributes too. Strips trailing punctuation . , ; : ! ? ) ] } ' " >
     Deduplicated, first-seen order. None/empty/no URLs -> [].
     """
-    raise NotImplementedError("DATA-02: see specs/01-data.md")
+    if _is_missing(text):
+        return []
+    urls: list[str] = []
+    for match in _URL_RE.finditer(str(text)):
+        url = match.group(0).rstrip(_URL_TRAILING)
+        if _URL_HAS_BODY_RE.fullmatch(url) and url not in urls:  # skip a bare "https://"
+            urls.append(url)
+    return urls
 
 
 def load_email_corpus(path: str | Path) -> pd.DataFrame:
