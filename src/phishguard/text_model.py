@@ -8,12 +8,11 @@ from typing import Sequence
 
 import numpy as np
 import torch
-from sklearn.model_selection import train_test_split
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from phishguard.config import TextTrainConfig, TrainResult
 from phishguard.evaluate import compute_metrics
-from phishguard.utils import select_device, set_seed
+from phishguard.utils import select_device, set_seed, stratified_subset
 
 PHISHING_INDEX = 1  # the classification head's second output is P(phishing)
 
@@ -77,15 +76,6 @@ class PhishTextClassifier:
 
 
 LOG_EVERY_STEPS = 200  # progress line frequency during an epoch
-
-
-def stratified_subset(texts: list[str], labels: list[int], n: int | None, seed: int) -> tuple[list[str], list[int]]:
-    """A random subset of n examples with the same phishing rate as the full set (for quick runs)."""
-    if n is None or n >= len(texts):
-        return texts, labels
-    stratify = labels if min(labels.count(0), labels.count(1)) >= 2 else None
-    keep, _ = train_test_split(np.arange(len(texts)), train_size=n, random_state=seed, stratify=stratify)
-    return [texts[i] for i in keep], [labels[i] for i in keep]
 
 
 def linear_warmup_then_decay(warmup_steps: int, total_steps: int):

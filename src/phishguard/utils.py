@@ -6,6 +6,7 @@ import warnings
 
 import numpy as np
 import torch
+from sklearn.model_selection import train_test_split
 
 # Order tried when no device is requested: NVIDIA GPU, then Apple GPU, then CPU.
 _AUTO_ORDER = ("cuda", "mps", "cpu")
@@ -45,3 +46,12 @@ def select_device(prefer: str | None = None) -> torch.device:
         if _is_available(name):
             return torch.device(name)
     return torch.device("cpu")
+
+
+def stratified_subset(texts: list[str], labels: list[int], n: int | None, seed: int) -> tuple[list[str], list[int]]:
+    """A random subset of n examples with the same phishing rate as the full set (for quick runs)."""
+    if n is None or n >= len(texts):
+        return texts, labels
+    stratify = labels if min(labels.count(0), labels.count(1)) >= 2 else None
+    keep, _ = train_test_split(np.arange(len(texts)), train_size=n, random_state=seed, stratify=stratify)
+    return [texts[i] for i in keep], [labels[i] for i in keep]

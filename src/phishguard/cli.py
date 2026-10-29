@@ -107,6 +107,20 @@ def _train_baseline(args: argparse.Namespace) -> None:
     print(f"Saved {args.out}")
 
 
+def _report_training(result, config, start: float) -> None:
+    """Print the per-epoch history and keep it next to the model (train_history.json) for the report."""
+    minutes = (time.perf_counter() - start) / 60
+    print("\nepoch | train_loss | val_f1")
+    for h in result.history:
+        print(f"{h['epoch']:>5} | {h['train_loss']:>10.4f} | {h['val_f1']:.4f}")
+    print(f"Best epoch {result.best_epoch} (val F1 {result.best_val_f1:.4f}), saved to {result.output_dir}")
+    print(f"Total time {minutes:.1f} min")
+
+    summary = {"config": vars(config), "history": result.history, "best_epoch": result.best_epoch,
+               "best_val_f1": result.best_val_f1, "minutes": round(minutes, 1)}
+    (Path(result.output_dir) / "train_history.json").write_text(json.dumps(summary, indent=2))
+
+
 def _train_text(args: argparse.Namespace) -> None:
     from phishguard.data import read_split
     from phishguard.text_model import train_text_model
@@ -127,18 +141,29 @@ def _train_text(args: argparse.Namespace) -> None:
     result = train_text_model(
         train["text"].tolist(), train["label"].tolist(), val["text"].tolist(), val["label"].tolist(), config
     )
-    minutes = (time.perf_counter() - start) / 60
+    _report_training(result, config, start)
 
-    print("\nepoch | train_loss | val_f1")
-    for h in result.history:
-        print(f"{h['epoch']:>5} | {h['train_loss']:>10.4f} | {h['val_f1']:.4f}")
-    print(f"Best epoch {result.best_epoch} (val F1 {result.best_val_f1:.4f}), saved to {result.output_dir}")
-    print(f"Total time {minutes:.1f} min")
 
-    # Keep the curve next to the model for the report.
-    summary = {"config": vars(config), "history": result.history, "best_epoch": result.best_epoch,
-               "best_val_f1": result.best_val_f1, "minutes": round(minutes, 1)}
-    (Path(result.output_dir) / "train_history.json").write_text(json.dumps(summary, indent=2))
+def _train_url(args: argparse.Namespace) -> None:
+    from phishguard.data import read_split
+    from phishguard.url_model import train_url_model
+
+    data_dir = Path(args.data_dir)
+    train, val = read_split(data_dir / "url_train.csv"), read_split(data_dir / "url_val.csv")
+    config = UrlTrainConfig(
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        lr=args.lr,
+        output_dir=args.out_dir,
+        device=args.device,
+        max_train_samples=args.max_train_samples,
+    )
+    print(f"Training the character-level CNN: {config}", flush=True)
+    start = time.perf_counter()
+    result = train_url_model(
+        train["url"].tolist(), train["label"].tolist(), val["url"].tolist(), val["label"].tolist(), config
+    )
+    _report_training(result, config, start)
 
 
 def _serve(args: argparse.Namespace) -> None:
@@ -166,7 +191,7 @@ HANDLERS = {
     "prepare-data": _prepare_data,
     "train-baseline": _train_baseline,
     "train-text": _train_text,
-    "train-url": _not_built_yet("T12"),
+    "train-url": _train_url,
     "fit-fusion": _not_built_yet("T13"),
     "evaluate": _not_built_yet("T13"),
     "serve": _serve,
