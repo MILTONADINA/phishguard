@@ -9,7 +9,7 @@ In Claude Code: `/next-task` does exactly one task and commits; `/status` shows 
 - [x] T1 Seeding + device selection
 - [x] T2 Text cleaning + URL extraction
 - [x] T3 Dataset loaders
-- [ ] T4 Dedup, splits, prepare-data (+ CLI parser) — run it on the real data
+- [x] T4 Dedup, splits, prepare-data (+ CLI parser) — run it on the real data
 - [ ] T5 Evaluation metrics
 - [ ] T6 Baseline — train it
 - [ ] T7 DistilBERT classifier wrapper

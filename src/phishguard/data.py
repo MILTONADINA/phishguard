@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 import pandas as pd
+from sklearn.model_selection import train_test_split
 
 # ---- DATA-01 patterns -------------------------------------------------------
 # <style>/<script> blocks hold CSS/JavaScript, not words a reader sees. Dropping their contents
@@ -198,9 +199,52 @@ def split_dataset(
     label_col: str = "label",
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """DATA-07: deduplicate, then stratified train/val/test split. Deterministic per seed. Disjoint texts."""
-    raise NotImplementedError("DATA-07: see specs/01-data.md")
+    df = deduplicate(df, text_col=text_col, label_col=label_col)  # no text can land in two splits
+    n = len(df)
+    # Whole-row counts (not fractions) so val and test are exactly round(n * size) rows each.
+    rest, test = _split_off(df, round(n * test_size), seed, label_col)
+    train, val = _split_off(rest, round(n * val_size), seed, label_col)
+    return train.reset_index(drop=True), val.reset_index(drop=True), test.reset_index(drop=True)
+
+
+def _split_off(df: pd.DataFrame, n_rows: int, seed: int, label_col: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Randomly take n_rows out of df, keeping the label mix the same. Returns (rest, taken)."""
+    if n_rows == 0:
+        return df, df.iloc[0:0]
+    label_counts = df[label_col].value_counts()
+    stratify = df[label_col] if label_counts.min() >= 2 else None  # stratifying needs 2+ rows per class
+    rest, taken = train_test_split(df, test_size=n_rows, random_state=seed, stratify=stratify)
+    return rest, taken
 
 
 def prepare_data(raw_dir: str | Path, out_dir: str | Path, seed: int = 42) -> dict[str, int]:
     """DATA-08: build every processed CSV split from the raw files. Returns {file name: row count}."""
-    raise NotImplementedError("DATA-08: see specs/01-data.md")
+    raw_dir, out_dir = Path(raw_dir), Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    counts: dict[str, int] = {}
+
+    def write(df: pd.DataFrame, name: str) -> None:
+        df.to_csv(out_dir / name, index=False)
+        counts[name] = len(df)
+
+    # Emails: the combined Kaggle file if present, otherwise the per-source files.
+    combined = raw_dir / "phishing_email.csv"
+    emails = load_email_corpus(combined if combined.exists() else raw_dir / "emails")
+    email_splits = split_dataset(emails[["text", "label"]], seed=seed)
+    for name, part in zip(("train.csv", "val.csv", "test.csv"), email_splits):
+        write(part, name)
+
+    urls = load_url_dataset(raw_dir / "PhiUSIIL_Phishing_URL_Dataset.csv")
+    url_splits = split_dataset(urls, seed=seed, text_col="url")
+    for name, part in zip(("url_train.csv", "url_val.csv", "url_test.csv"), url_splits):
+        write(part, name)
+
+    # Held-out set (optional): drop any email that also appears in the training corpus.
+    heldout_path = raw_dir / "Phishing_validation_emails.csv"
+    if heldout_path.exists():
+        heldout = load_validation_emails(heldout_path)
+        corpus_texts = set(_normalize(emails["text"]))
+        leaked = _normalize(heldout["text"]).isin(corpus_texts).to_numpy()
+        write(heldout[~leaked].reset_index(drop=True), "heldout.csv")
+
+    return counts
