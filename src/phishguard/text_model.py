@@ -1,15 +1,19 @@
 """Stage 1: fine-tuned DistilBERT text classifier. Spec: specs/03-text-model.md."""
 from __future__ import annotations
 
+import math
+import time
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
 import torch
+from sklearn.model_selection import train_test_split
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from phishguard.config import TextTrainConfig, TrainResult
-from phishguard.utils import select_device
+from phishguard.evaluate import compute_metrics
+from phishguard.utils import select_device, set_seed
 
 PHISHING_INDEX = 1  # the classification head's second output is P(phishing)
 
@@ -72,6 +76,29 @@ class PhishTextClassifier:
         return cls(path, **kwargs)
 
 
+LOG_EVERY_STEPS = 200  # progress line frequency during an epoch
+
+
+def stratified_subset(texts: list[str], labels: list[int], n: int | None, seed: int) -> tuple[list[str], list[int]]:
+    """A random subset of n examples with the same phishing rate as the full set (for quick runs)."""
+    if n is None or n >= len(texts):
+        return texts, labels
+    stratify = labels if min(labels.count(0), labels.count(1)) >= 2 else None
+    keep, _ = train_test_split(np.arange(len(texts)), train_size=n, random_state=seed, stratify=stratify)
+    return [texts[i] for i in keep], [labels[i] for i in keep]
+
+
+def linear_warmup_then_decay(warmup_steps: int, total_steps: int):
+    """Learning-rate multiplier per step: rises 0 -> 1 over the warmup, then falls linearly to 0."""
+
+    def factor(step: int) -> float:
+        if step < warmup_steps:
+            return step / warmup_steps
+        return max(0.0, (total_steps - step) / max(1, total_steps - warmup_steps))
+
+    return factor
+
+
 def train_text_model(
     train_texts: Sequence[str],
     train_labels: Sequence[int],
@@ -81,4 +108,72 @@ def train_text_model(
 ) -> TrainResult:
     """TEXT-03/04/05: fine-tuning loop (AdamW + linear warmup/decay, per-epoch val F1,
     save best to config.output_dir, early stopping on patience)."""
-    raise NotImplementedError("TEXT-03: see specs/03-text-model.md")
+    set_seed(config.seed)
+    train_texts, train_labels = stratified_subset(
+        list(train_texts), [int(y) for y in train_labels], config.max_train_samples, config.seed
+    )
+    val_texts, val_labels = list(val_texts), [int(y) for y in val_labels]
+
+    clf = PhishTextClassifier(
+        config.model_name, max_length=config.max_length, device=config.device, batch_size=config.eval_batch_size
+    )
+    model = clf.model
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+    steps_per_epoch = math.ceil(len(train_texts) / config.batch_size)
+    total_steps = steps_per_epoch * config.epochs
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer, linear_warmup_then_decay(int(config.warmup_ratio * total_steps), total_steps)
+    )
+    loss_fn = torch.nn.CrossEntropyLoss()
+    shuffler = np.random.default_rng(config.seed)
+    print(
+        f"Training on {len(train_texts):,} emails, {steps_per_epoch:,} steps/epoch, device {clf.device}",
+        flush=True,
+    )
+
+    history: list[dict] = []
+    best_f1, best_epoch, epochs_without_improvement = -1.0, 0, 0
+    for epoch in range(1, config.epochs + 1):
+        model.train()  # dropout on while learning
+        order = shuffler.permutation(len(train_texts))  # new order every epoch
+        epoch_start = time.perf_counter()
+        loss_sum = torch.zeros((), device=clf.device)  # summed on the device: no GPU sync every step
+        for step, start in enumerate(range(0, len(order), config.batch_size), start=1):
+            idx = order[start : start + config.batch_size]
+            batch = clf.tokenize([train_texts[i] for i in idx])
+            targets = torch.tensor([train_labels[i] for i in idx], device=clf.device)
+
+            loss = loss_fn(model(**batch).logits, targets)
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # guard against loss spikes
+            optimizer.step()
+            scheduler.step()
+            loss_sum += loss.detach() * len(idx)
+
+            if step % LOG_EVERY_STEPS == 0:
+                elapsed = time.perf_counter() - epoch_start
+                eta = elapsed / step * (steps_per_epoch - step)
+                print(
+                    f"  epoch {epoch} step {step:,}/{steps_per_epoch:,}  "
+                    f"avg loss {loss_sum.item() / (start + len(idx)):.4f}  "
+                    f"{elapsed / 60:.1f} min elapsed, ~{eta / 60:.1f} min left",
+                    flush=True,
+                )
+
+        train_loss = loss_sum.item() / len(train_texts)
+        val_f1 = compute_metrics(val_labels, clf.predict_proba(val_texts))["f1"]
+        minutes = (time.perf_counter() - epoch_start) / 60
+        history.append({"epoch": epoch, "train_loss": train_loss, "val_f1": val_f1})
+        print(f"epoch {epoch}: train_loss {train_loss:.4f}  val_f1 {val_f1:.4f}  ({minutes:.1f} min)", flush=True)
+
+        if val_f1 > best_f1:  # keep only the best checkpoint
+            best_f1, best_epoch, epochs_without_improvement = val_f1, epoch, 0
+            clf.save(config.output_dir)
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= config.patience:
+                print(f"Stopping early: no val F1 improvement for {config.patience} epoch(s)", flush=True)
+                break
+
+    return TrainResult(history=history, best_epoch=best_epoch, best_val_f1=best_f1, output_dir=config.output_dir)

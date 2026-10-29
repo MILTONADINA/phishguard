@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from pathlib import Path
 
@@ -106,6 +107,40 @@ def _train_baseline(args: argparse.Namespace) -> None:
     print(f"Saved {args.out}")
 
 
+def _train_text(args: argparse.Namespace) -> None:
+    from phishguard.data import read_split
+    from phishguard.text_model import train_text_model
+
+    data_dir = Path(args.data_dir)
+    train, val = read_split(data_dir / "train.csv"), read_split(data_dir / "val.csv")
+    config = TextTrainConfig(
+        max_length=args.max_length,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        lr=args.lr,
+        output_dir=args.out_dir,
+        device=args.device,
+        max_train_samples=args.max_train_samples,
+    )
+    print(f"Fine-tuning {config.model_name}: {config}", flush=True)
+    start = time.perf_counter()
+    result = train_text_model(
+        train["text"].tolist(), train["label"].tolist(), val["text"].tolist(), val["label"].tolist(), config
+    )
+    minutes = (time.perf_counter() - start) / 60
+
+    print("\nepoch | train_loss | val_f1")
+    for h in result.history:
+        print(f"{h['epoch']:>5} | {h['train_loss']:>10.4f} | {h['val_f1']:.4f}")
+    print(f"Best epoch {result.best_epoch} (val F1 {result.best_val_f1:.4f}), saved to {result.output_dir}")
+    print(f"Total time {minutes:.1f} min")
+
+    # Keep the curve next to the model for the report.
+    summary = {"config": vars(config), "history": result.history, "best_epoch": result.best_epoch,
+               "best_val_f1": result.best_val_f1, "minutes": round(minutes, 1)}
+    (Path(result.output_dir) / "train_history.json").write_text(json.dumps(summary, indent=2))
+
+
 def _not_built_yet(task: str):
     def handler(args: argparse.Namespace) -> None:
         raise NotImplementedError(f"`{args.command}` is built in {task} (see TASKS.md)")
@@ -116,7 +151,7 @@ def _not_built_yet(task: str):
 HANDLERS = {
     "prepare-data": _prepare_data,
     "train-baseline": _train_baseline,
-    "train-text": _not_built_yet("T8"),
+    "train-text": _train_text,
     "train-url": _not_built_yet("T12"),
     "fit-fusion": _not_built_yet("T13"),
     "evaluate": _not_built_yet("T13"),
