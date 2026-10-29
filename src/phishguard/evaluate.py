@@ -1,6 +1,9 @@
 """Metrics and the full evaluation. Spec: specs/06-evaluation.md."""
 from __future__ import annotations
 
+import json
+import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
@@ -76,6 +79,79 @@ def compare_models(results: dict[str, dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+LATENCY_EMAILS = 20  # emails timed through PhishDetector.analyze (after one warm-up call)
+
+
+def _detector_metrics(detector, texts: Sequence[str], labels: Sequence[int]) -> dict:
+    """The full pipeline, one email at a time, exactly as the web app calls it."""
+    scores = [detector.analyze(t).score for t in texts]
+    return compute_metrics(labels, scores, threshold=detector.fusion.threshold)
+
+
 def evaluate_all(data_dir: str | Path, models_dir: str | Path, reports_dir: str | Path = "reports") -> dict:
     """EVAL-04: evaluate every model on the real splits, measure latency, write metrics.json + metrics.md."""
-    raise NotImplementedError("EVAL-04: see specs/06-evaluation.md")
+    # Imported here: the detector and the models import this module (compute_metrics) themselves.
+    from phishguard.baseline import baseline_predict_proba, load_baseline
+    from phishguard.data import read_split
+    from phishguard.detector import PhishDetector
+
+    data_dir, models_dir, reports_dir = Path(data_dir), Path(models_dir), Path(reports_dir)
+    test = read_split(data_dir / "test.csv")
+    heldout_path = data_dir / "heldout.csv"
+    heldout = read_split(heldout_path) if heldout_path.exists() else None
+
+    baseline = load_baseline(models_dir / "baseline.joblib")
+    detector = PhishDetector.from_dir(models_dir)  # text/ (+ url/ and fusion.json when present)
+    texts, labels = test["text"].tolist(), test["label"].tolist()
+
+    results: dict[str, dict] = {}
+    print("Scoring the test split...", flush=True)
+    results["baseline"] = compute_metrics(labels, baseline_predict_proba(baseline, texts))
+    results["text_model"] = compute_metrics(labels, detector.text_model.predict_proba(texts))
+    if detector.url_model is not None:
+        url_test = read_split(data_dir / "url_test.csv")
+        url_probs = detector.url_model.predict_proba(url_test["url"].tolist())
+        results["url_model"] = compute_metrics(url_test["label"].tolist(), url_probs)
+    results["detector"] = _detector_metrics(detector, texts, labels)
+
+    if heldout is not None:
+        # A different source that no model was trained or tuned on. The baseline and text-model rows are
+        # extra (not required by EVAL-04): they show which stage generalises.
+        print("Scoring the held-out set...", flush=True)
+        h_texts, h_labels = heldout["text"].tolist(), heldout["label"].tolist()
+        results["baseline_heldout"] = compute_metrics(h_labels, baseline_predict_proba(baseline, h_texts))
+        results["text_model_heldout"] = compute_metrics(h_labels, detector.text_model.predict_proba(h_texts))
+        results["detector_heldout"] = _detector_metrics(detector, h_texts, h_labels)
+
+    detector.analyze(texts[0])  # warm-up: the first call pays one-off setup costs
+    times = []
+    for text in texts[:LATENCY_EMAILS]:
+        start = time.perf_counter()
+        detector.analyze(text)
+        times.append((time.perf_counter() - start) * 1000)
+    latency = {"median": float(np.median(times)), "p95": float(np.percentile(times, 95))}
+
+    metrics = {**results, "latency_ms": latency, "fusion": asdict(detector.fusion)}
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
+    (reports_dir / "metrics.md").write_text(_metrics_markdown(results, latency, detector, len(texts), heldout))
+    return metrics
+
+
+def _metrics_markdown(results: dict, latency: dict, detector, n_test: int, heldout) -> str:
+    fusion = detector.fusion
+    stage2 = "text + URL" if detector.url_model is not None else "text only (no URL model)"
+    lines = [
+        "# PhishGuard evaluation",
+        "",
+        f"Written by `python -m phishguard evaluate`. Positive class = phishing. Test split: {n_test:,} emails"
+        + (f"; held-out set (Zenodo 13474746, a different source): {len(heldout):,} emails." if heldout is not None else "."),
+        f"Detector: {stage2}, fusion weight {fusion.weight} on the text score, threshold {fusion.threshold} "
+        "(fitted on the validation split). Every other row uses threshold 0.5.",
+        "",
+        compare_models(results),
+        f"Latency of `PhishDetector.analyze` over {LATENCY_EMAILS} test emails after a warm-up: "
+        f"median {latency['median']:.1f} ms, 95th percentile {latency['p95']:.1f} ms.",
+        "",
+    ]
+    return "\n".join(lines)

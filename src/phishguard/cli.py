@@ -166,6 +166,52 @@ def _train_url(args: argparse.Namespace) -> None:
     _report_training(result, config, start)
 
 
+def _fit_fusion(args: argparse.Namespace) -> None:
+    from phishguard.config import MAX_URLS
+    from phishguard.data import clean_text, extract_urls, read_split
+    from phishguard.detector import PhishDetector
+    from phishguard.evaluate import compute_metrics
+    from phishguard.fusion import DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS, aggregate_url_scores, fit_fusion, fuse
+
+    models_dir = Path(args.models_dir)
+    val = read_split(Path(args.data_dir) / "val.csv")  # validation only: test and held-out stay untouched
+    texts, labels = val["text"].tolist(), val["label"].tolist()
+    detector = PhishDetector.from_dir(models_dir)  # only its models are used; the fusion is what we fit
+
+    # Same scores PhishDetector.analyze would compute, but in batches.
+    print(f"Scoring {len(texts):,} validation emails...", flush=True)
+    text_scores = detector.text_model.predict_proba([clean_text(t) for t in texts]).tolist()
+    url_scores = [None] * len(texts)
+    if detector.url_model is not None:
+        links = [extract_urls(t)[:MAX_URLS] for t in texts]
+        flat = iter(detector.url_model.predict_proba([u for email_links in links for u in email_links]))
+        url_scores = [aggregate_url_scores([next(flat) for _ in email_links]) for email_links in links]
+        print(f"  {sum(s is not None for s in url_scores):,} of them contain links", flush=True)
+
+    # How much each weight can reach (best threshold per weight), for the report.
+    print("\nweight | best val F1")
+    for weight in DEFAULT_WEIGHTS:
+        fused = [fuse(t, u, weight) for t, u in zip(text_scores, url_scores)]
+        best = max(compute_metrics(labels, fused, threshold)["f1"] for threshold in DEFAULT_THRESHOLDS)
+        print(f"{weight:>6} | {best:.4f}")
+
+    params = fit_fusion(text_scores, url_scores, labels)
+    params.save(models_dir / "fusion.json")
+    chosen = compute_metrics(labels, [fuse(t, u, params.weight) for t, u in zip(text_scores, url_scores)],
+                             params.threshold)
+    print(f"\nChosen: weight {params.weight} on the text score, threshold {params.threshold} "
+          f"(val F1 {chosen['f1']:.4f}). Saved {models_dir / 'fusion.json'}")
+
+
+def _evaluate(args: argparse.Namespace) -> None:
+    from phishguard.evaluate import evaluate_all
+
+    start = time.perf_counter()
+    evaluate_all(args.data_dir, args.models_dir, args.reports_dir)
+    print((Path(args.reports_dir) / "metrics.md").read_text())
+    print(f"Evaluation took {(time.perf_counter() - start) / 60:.1f} min")
+
+
 def _serve(args: argparse.Namespace) -> None:
     import os
 
@@ -180,20 +226,13 @@ def _serve(args: argparse.Namespace) -> None:
     uvicorn.run(app, host=args.host, port=args.port)
 
 
-def _not_built_yet(task: str):
-    def handler(args: argparse.Namespace) -> None:
-        raise NotImplementedError(f"`{args.command}` is built in {task} (see TASKS.md)")
-
-    return handler
-
-
 HANDLERS = {
     "prepare-data": _prepare_data,
     "train-baseline": _train_baseline,
     "train-text": _train_text,
     "train-url": _train_url,
-    "fit-fusion": _not_built_yet("T13"),
-    "evaluate": _not_built_yet("T13"),
+    "fit-fusion": _fit_fusion,
+    "evaluate": _evaluate,
     "serve": _serve,
 }
 

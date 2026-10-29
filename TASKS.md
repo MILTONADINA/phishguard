@@ -18,7 +18,7 @@ In Claude Code: `/next-task` does exactly one task and commits; `/status` shows 
 - [x] T10 Detector
 - [x] T11 Web app + API — **Must tier done**
 - [x] T12 URL model — train it
-- [ ] T13 Fusion fitting + full evaluation + acceptance — **Should tier done**
+- [x] T13 Fusion fitting + full evaluation + acceptance — **Should tier done**
 - [ ] T14 Report, demo, recording
 
 Starting state: `pytest` → 3 passed (traceability), everything else fails with `NotImplementedError`.
