@@ -8,7 +8,7 @@ In Claude Code: `/next-task` does exactly one task and commits; `/status` shows 
 - [x] T0 Setup: venv, install, git init, first commit
 - [x] T1 Seeding + device selection
 - [x] T2 Text cleaning + URL extraction
-- [ ] T3 Dataset loaders
+- [x] T3 Dataset loaders
 - [ ] T4 Dedup, splits, prepare-data (+ CLI parser) — run it on the real data
 - [ ] T5 Evaluation metrics
 - [ ] T6 Baseline — train it
