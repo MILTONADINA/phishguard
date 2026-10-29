@@ -1,0 +1,22 @@
+# data and trained models (too big for GitHub; see README for download steps)
+data/
+models/
+reports/*.json
+logs/
+
+# Claude Code personal files
+.claude/settings.local.json
+CLAUDE.local.md
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store

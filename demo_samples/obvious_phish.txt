@@ -1,0 +1,12 @@
+Subject: URGENT: Your account has been suspended
+
+Dear Customer,
+
+We detected unusual sign-in activity on your account. Your account has been temporarily suspended.
+To restore access you must verify your identity within 24 hours or your account will be permanently closed.
+
+Verify your account now: http://paypa1-secure-login.com/verify?id=88213
+
+Failure to verify will result in loss of access to your funds.
+
+Security Team
