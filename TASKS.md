@@ -16,7 +16,7 @@ In Claude Code: `/next-task` does exactly one task and commits; `/status` shows 
 - [x] T8 Fine-tuning loop — quick run, then full run
 - [x] T9 Fusion, verdict, reasons
 - [x] T10 Detector
-- [ ] T11 Web app + API — **Must tier done**
+- [x] T11 Web app + API — **Must tier done**
 - [ ] T12 URL model — train it
 - [ ] T13 Fusion fitting + full evaluation + acceptance — **Should tier done**
 - [ ] T14 Report, demo, recording

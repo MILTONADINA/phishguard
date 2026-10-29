@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhishGuard</title>
+<link rel="icon" href="data:,"><!-- no icon file: stops the browser asking for /favicon.ico -->
+<style>
+  /* Everything is inline and uses system fonts, so the page works offline (API-06). */
+  :root {
+    --paper: #ffffff;
+    --ink: #1c2b3f;
+    --muted: #5a6a80;
+    --tint: #c9d5e8;        /* the pattern printed inside security envelopes */
+    --tint-ink: #3d5a88;
+    --line: #b9c4d4;
+    --phish: #b3261e;       /* cancellation-stamp red */
+    --legit: #1e6e46;
+    --serif: "Iowan Old Style", Charter, "Palatino Linotype", Georgia, serif;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --stamp: "Avenir Next Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.55 var(--serif); }
+
+  header {
+    padding: 1.75rem 16px 1.5rem;
+    background: repeating-linear-gradient(135deg, var(--tint) 0 1.5px, transparent 1.5px 7px), var(--paper);
+    border-bottom: 1px solid var(--line);
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+  h1 { margin: 0; font-size: 2.3rem; line-height: 1.1; letter-spacing: -0.01em; }
+  h1 span { background: var(--paper); padding: 0 0.3rem 0 0; }
+  .lede { margin: 0.4rem 0 0; color: var(--muted); max-width: 62ch; }
+  .lede span { background: var(--paper); }
+
+  main { padding: 1.75rem 16px 3rem; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: 2.25rem; align-items: start; }
+  @media (max-width: 820px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+
+  label { display: block; font: 600 0.95rem var(--sans); margin-bottom: 0.4rem; }
+  textarea {
+    width: 100%; min-height: 24rem; resize: vertical; padding: 1rem;
+    font: 0.9rem/1.5 var(--mono); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px; background: #fbfcfe;
+  }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-top: 0.9rem; font-family: var(--sans); }
+  button { font: 600 1rem var(--sans); padding: 0.65rem 1.4rem; border-radius: 4px; cursor: pointer; border: 1px solid var(--ink); }
+  #analyze { background: var(--ink); color: var(--paper); }
+  #analyze:disabled { opacity: 0.6; cursor: progress; }
+  #clear { background: transparent; color: var(--ink); border-color: var(--line); }
+  .hint { color: var(--muted); font-size: 0.85rem; }
+  textarea:focus-visible, button:focus-visible { outline: 3px solid var(--tint-ink); outline-offset: 2px; }
+
+  #result { font-family: var(--sans); font-size: 0.98rem; }
+  .empty { color: var(--muted); border: 1px dashed var(--line); border-radius: 4px; padding: 1.5rem; font-family: var(--serif); }
+  .error { color: var(--phish); border: 1px solid var(--phish); border-radius: 4px; padding: 1rem 1.25rem; }
+
+  .stamp {
+    display: inline-block; margin: 0.4rem 0 1.4rem 0.3rem; padding: 0.15rem 0.9rem;
+    font: 700 2.6rem/1.15 var(--stamp); letter-spacing: 0.05em; text-transform: uppercase;
+    border: 3px solid currentColor; outline: 1.5px solid currentColor; outline-offset: 3px; border-radius: 6px;
+    transform: rotate(-4deg); animation: land 260ms cubic-bezier(.2, .9, .3, 1.2);
+  }
+  .phishing .stamp, .phishing .fill { color: var(--phish); }
+  .legitimate .stamp, .legitimate .fill { color: var(--legit); }
+  @keyframes land { from { transform: rotate(-9deg) scale(1.35); opacity: 0; } to { transform: rotate(-4deg) scale(1); opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .stamp { animation: none; } }
+
+  .score { font-size: 1.15rem; margin: 0 0 0.5rem; }
+  .score strong { font-size: 1.6rem; }
+  .meter { position: relative; height: 10px; background: #e4e9f0; border-radius: 5px; margin-bottom: 2.4rem; }
+  .fill { height: 100%; border-radius: 5px; background: currentColor; }
+  .tick { position: absolute; top: -5px; width: 2px; height: 20px; background: var(--ink); }
+  .tick span { position: absolute; top: 22px; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 0.78rem; color: var(--muted); }
+
+  h2 { font: 600 1rem var(--sans); margin: 1.4rem 0 0.5rem; }
+  ul { margin: 0; padding: 0; list-style: none; }
+  .reasons li { padding: 0.35rem 0 0.35rem 1rem; border-left: 3px solid var(--tint); margin-bottom: 0.35rem; font-family: var(--serif); }
+  .links li { display: grid; grid-template-columns: 1.4rem minmax(0, 1fr) auto; gap: 0.5rem; padding: 0.45rem 0; border-bottom: 1px solid #e4e9f0; }
+  .links code { font: 0.85rem var(--mono); overflow-wrap: anywhere; }
+  .links .flagged { color: var(--phish); font-weight: 600; }
+  .links .note { color: var(--muted); font-size: 0.85rem; }
+  .models { display: grid; grid-template-columns: auto auto; justify-content: start; gap: 0.2rem 1.25rem; margin: 1.6rem 0 0; color: var(--muted); font-size: 0.88rem; }
+  .models dd { margin: 0; color: var(--ink); }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1><span>PhishGuard</span></h1>
+    <p class="lede"><span>Paste an email, links included, to check it for phishing.</span></p>
+  </div>
+</header>
+
+<main>
+  <div class="wrap grid">
+    <section>
+      <label for="email_text">Email text</label>
+      <textarea id="email_text" spellcheck="false" placeholder="Paste the subject and body of the email here."></textarea>
+      <div class="actions">
+        <button id="analyze" type="button">Analyze</button>
+        <button id="clear" type="button">Clear</button>
+        <span class="hint">or press ⌘/Ctrl + Enter</span>
+      </div>
+    </section>
+
+    <section id="result" aria-live="polite">
+      <p class="empty">The verdict and the reasons for it appear here after you analyze an email.</p>
+    </section>
+  </div>
+</main>
+
+<script>
+  const input = document.getElementById("email_text");
+  const button = document.getElementById("analyze");
+  const result = document.getElementById("result");
+
+  // Small helper: build an element with a class and text. textContent (never innerHTML) is used for
+  // everything that comes from the email, so a pasted email can't inject HTML or scripts into the page.
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+  const percent = (x) => Math.round(x * 100) + "%";
+
+  function showMessage(className, text) {
+    result.replaceChildren(el("p", className, text));
+  }
+
+  function showResult(data) {
+    const box = el("div", data.verdict);
+    box.append(el("div", "stamp", data.verdict));
+
+    const score = el("p", "score");
+    score.append(el("strong", null, percent(data.score)), " phishing score");
+    box.append(score);
+
+    // Bar for the fused score, with a tick at the decision threshold.
+    const meter = el("div", "meter");
+    const fill = el("div", "fill");
+    fill.style.width = percent(data.score);
+    const tick = el("div", "tick");
+    tick.style.left = percent(data.threshold);
+    tick.append(el("span", null, "threshold " + percent(data.threshold)));
+    meter.append(fill, tick);
+    box.append(meter);
+
+    box.append(el("h2", null, "Why"));
+    const reasons = el("ul", "reasons");
+    data.reasons.forEach((r) => reasons.append(el("li", null, r)));
+    box.append(reasons);
+
+    if (data.urls.length) {
+      // url_score is null while there are links only when no URL model is loaded: say so, don't show ✓.
+      const checked = data.url_score !== null;
+      box.append(el("h2", null, "Links (" + data.urls.length + ")"));
+      const links = el("ul", "links");
+      data.urls.forEach((u) => {
+        const li = el("li");
+        if (!checked) li.append(el("span", "note", "–"), el("code", null, u.url), el("span", "note", "not checked"));
+        else if (u.flagged) li.append(el("span", "flagged", "⚠"), el("code", null, u.url), el("span", "flagged", percent(u.score)));
+        else li.append(el("span", null, "✓"), el("code", null, u.url), el("span", "note", percent(u.score)));
+        links.append(li);
+      });
+      box.append(links);
+    }
+
+    const models = el("dl", "models");
+    models.append(el("dt", null, "Wording model"), el("dd", null, percent(data.text_score)));
+    const linkModel = data.url_score !== null ? percent(data.url_score) : data.urls.length ? "not loaded" : "no links to check";
+    models.append(el("dt", null, "Link model"), el("dd", null, linkModel));
+    box.append(models);
+
+    result.replaceChildren(box);
+  }
+
+  async function analyze() {
+    const emailText = input.value;
+    if (!emailText.trim()) {
+      showMessage("error", "Paste some email text first.");
+      input.focus();
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "Analyzing…";
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email_text: emailText }),
+      });
+      const data = await response.json();
+      if (response.ok) showResult(data);
+      else showMessage("error", typeof data.detail === "string" ? data.detail : "The server rejected this email (" + response.status + ").");
+    } catch (err) {
+      showMessage("error", "Couldn't reach the server. Check that `python -m phishguard serve` is still running.");
+    } finally {
+      button.disabled = false;
+      button.textContent = "Analyze";
+    }
+  }
+
+  button.addEventListener("click", analyze);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) analyze();
+  });
+  document.getElementById("clear").addEventListener("click", () => {
+    input.value = "";
+    showMessage("empty", "The verdict and the reasons for it appear here after you analyze an email.");
+    input.focus();
+  });
+</script>
+</body>
+</html>

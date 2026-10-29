@@ -141,6 +141,20 @@ def _train_text(args: argparse.Namespace) -> None:
     (Path(result.output_dir) / "train_history.json").write_text(json.dumps(summary, indent=2))
 
 
+def _serve(args: argparse.Namespace) -> None:
+    import os
+
+    import uvicorn
+
+    # phishguard.app builds its `app` (and loads the models) when it is imported, from this
+    # variable. Setting it first means the models are loaded once, from --models-dir.
+    os.environ["PHISHGUARD_MODELS_DIR"] = args.models_dir
+    from phishguard.app import app
+
+    print(f"PhishGuard running at http://{args.host}:{args.port}  (Ctrl+C to stop)", flush=True)
+    uvicorn.run(app, host=args.host, port=args.port)
+
+
 def _not_built_yet(task: str):
     def handler(args: argparse.Namespace) -> None:
         raise NotImplementedError(f"`{args.command}` is built in {task} (see TASKS.md)")
@@ -155,7 +169,7 @@ HANDLERS = {
     "train-url": _not_built_yet("T12"),
     "fit-fusion": _not_built_yet("T13"),
     "evaluate": _not_built_yet("T13"),
-    "serve": _not_built_yet("T11"),
+    "serve": _serve,
 }
 
 
