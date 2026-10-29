@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import time
+from pathlib import Path
 
 from phishguard.config import SEED, TextTrainConfig, UrlTrainConfig
 
@@ -74,6 +76,36 @@ def _prepare_data(args: argparse.Namespace) -> None:
         print(f"  {name:<14} {rows:>9,} rows")
 
 
+def _print_metrics(title: str, m: dict) -> None:
+    print(f"{title} (n={m['n']:,}, threshold {m['threshold']}):")
+    print(
+        f"  accuracy {m['accuracy']:.4f}  precision {m['precision']:.4f}  recall {m['recall']:.4f}  "
+        f"F1 {m['f1']:.4f}  ROC-AUC {m['roc_auc']:.4f}"
+    )
+    print(
+        f"  false positives {m['fp']:,} (FPR {m['fpr']:.4f})  false negatives {m['fn']:,} (FNR {m['fnr']:.4f})"
+    )
+
+
+def _train_baseline(args: argparse.Namespace) -> None:
+    from phishguard.baseline import baseline_predict_proba, save_baseline, train_baseline
+    from phishguard.data import read_split
+    from phishguard.evaluate import compute_metrics
+
+    data_dir = Path(args.data_dir)
+    train, val = read_split(data_dir / "train.csv"), read_split(data_dir / "val.csv")
+
+    start = time.perf_counter()
+    model = train_baseline(train["text"].tolist(), train["label"].tolist())
+    print(f"Fitted TF-IDF + logistic regression on {len(train):,} emails in {time.perf_counter() - start:.0f} s")
+
+    # Validation only: the test split is reserved for the final evaluation (T13).
+    val_probs = baseline_predict_proba(model, val["text"].tolist())
+    _print_metrics("Validation", compute_metrics(val["label"].tolist(), val_probs))
+    save_baseline(model, args.out)
+    print(f"Saved {args.out}")
+
+
 def _not_built_yet(task: str):
     def handler(args: argparse.Namespace) -> None:
         raise NotImplementedError(f"`{args.command}` is built in {task} (see TASKS.md)")
@@ -83,7 +115,7 @@ def _not_built_yet(task: str):
 
 HANDLERS = {
     "prepare-data": _prepare_data,
-    "train-baseline": _not_built_yet("T6"),
+    "train-baseline": _train_baseline,
     "train-text": _not_built_yet("T8"),
     "train-url": _not_built_yet("T12"),
     "fit-fusion": _not_built_yet("T13"),

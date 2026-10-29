@@ -217,6 +217,15 @@ def _split_off(df: pd.DataFrame, n_rows: int, seed: int, label_col: str) -> tupl
     return rest, taken
 
 
+def read_split(path: str | Path) -> pd.DataFrame:
+    """Read a processed CSV (train.csv, url_test.csv, ...) exactly as prepare_data wrote it.
+
+    keep_default_na=False stops pandas from turning an email whose whole text is "NA", "null" or
+    "None" into a missing value, which would crash the text models.
+    """
+    return pd.read_csv(path, keep_default_na=False)
+
+
 def prepare_data(raw_dir: str | Path, out_dir: str | Path, seed: int = 42) -> dict[str, int]:
     """DATA-08: build every processed CSV split from the raw files. Returns {file name: row count}."""
     raw_dir, out_dir = Path(raw_dir), Path(out_dir)
