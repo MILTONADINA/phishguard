@@ -1,6 +1,6 @@
 PY := .venv/bin/python
 
-.PHONY: install test test-fast acceptance data baseline text text-quick url fusion evaluate serve
+.PHONY: install test test-fast acceptance data baseline text text-quick url fusion evaluate serve demo
 
 install:
 	python3.12 -m venv .venv
@@ -38,3 +38,11 @@ evaluate:
 
 serve:
 	$(PY) -m phishguard serve
+
+# Live demo in text-only mode: models/demo links to the text model and fusion.json but not url/,
+# because the URL model only learned PhiUSIIL's "has a path -> phishing" shortcut (see REPORT.md).
+demo:
+	mkdir -p models/demo
+	ln -sfn ../text models/demo/text
+	ln -sf ../fusion.json models/demo/fusion.json
+	$(PY) -m phishguard serve --models-dir models/demo

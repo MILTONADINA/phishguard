@@ -54,6 +54,8 @@ python -m phishguard evaluate                             # writes reports/metri
 python -m phishguard serve                                # http://127.0.0.1:8000
 ```
 
+For the live demo, `make demo` serves the text model only (links are listed but not scored). The URL model learned a dataset shortcut and flags almost every real link; see `REPORT.md` §4.
+
 ## Tests
 
 ```bash
@@ -76,4 +78,5 @@ demo_samples/   emails for the live demo
 TASKS.md        build order and calendar
 NOTES.md        running log of problems and decisions (feeds the report)
 REPORT.md       final report
+DEMO.md         5-minute demo script
 ```
