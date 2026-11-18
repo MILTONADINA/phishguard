@@ -17,6 +17,14 @@ _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 # Requiring the name keeps plain-text forms like <http://x.com>, <john@x.com> and "<3" intact.
 _TAG_RE = re.compile(r"</?[A-Za-z][\w:-]*(?:\s[^>]*)?/?>|<![^>]*>")
 _WHITESPACE_RE = re.compile(r"\s+")  # also matches the non-breaking space that &nbsp; becomes
+_SCRIPT_STYLE_START_RE = re.compile(r"<(script|style)\b", re.IGNORECASE)
+# clean_text stops after this many changing passes. Real emails need at most 2. Only crafted
+# input (e.g. "&amp;amp;amp;...lt;" or "<b<b<b...>>>") needs more, and each extra pass reads the whole text.
+_MAX_CLEAN_PASSES = 10
+# The same pattern html.unescape uses to find character references (Lib/html/__init__.py).
+_CHARREF_RE = re.compile(r"&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)")
+# Where markup could start: "<!" or "<" + optional "/" + tag name, then what follows the name.
+_MARKUP_START_RE = re.compile(r"<(?:!|/?[A-Za-z][\w:-]*(?:(\s|/?>)|(?=(<)))?)")
 
 # ---- DATA-02 patterns -------------------------------------------------------
 # A URL starts with http://, https:// or www. and runs until whitespace, a quote or an angle bracket
@@ -31,12 +39,79 @@ def _is_missing(value) -> bool:
     return value is None or (not isinstance(value, str) and pd.isna(value))
 
 
+def _sub_up_to_last(pattern: re.Pattern, text: str, terminator: str) -> str:
+    """pattern.sub(" ", text) for a pattern whose matches all end with terminator.
+
+    No match can run past the last terminator, so the text after it is kept as is. This stops
+    unclosed openers there ("<a ", "<!--") from making the regex rescan to the end of the text.
+    """
+    end = text.rfind(terminator)
+    if end < 0:
+        return text
+    end += len(terminator)
+    return pattern.sub(" ", text[:end]) + text[end:]
+
+
+def _drop_script_style(text: str) -> str:
+    """_SCRIPT_STYLE_RE.sub(" ", text), without rescanning the text for openers that can't close.
+
+    When a block fails to match, no closing tag for that exact opener spelling (e.g. "script",
+    "SCRIPT") follows. Later openers with the same spelling can't match either, so they are skipped.
+    """
+    parts: list[str] = []
+    copied = search_from = 0
+    unclosed: set[str] = set()
+    while (start := _SCRIPT_STYLE_START_RE.search(text, search_from)) is not None:
+        block = None if start.group(1) in unclosed else _SCRIPT_STYLE_RE.match(text, start.start())
+        if block is None:
+            unclosed.add(start.group(1))
+            search_from = start.start() + 1
+            continue
+        parts += [text[copied : block.start()], " "]
+        copied = search_from = block.end()
+    parts.append(text[copied:])
+    return "".join(parts)
+
+
 def _clean_once(text: str) -> str:
-    text = _SCRIPT_STYLE_RE.sub(" ", text)
-    text = _COMMENT_RE.sub(" ", text)
-    text = _TAG_RE.sub(" ", text)  # tags first, then entities, so "&lt;3" becomes "<3", not a tag
+    text = _drop_script_style(text)
+    text = _sub_up_to_last(_COMMENT_RE, text, "-->")
+    text = _sub_up_to_last(_TAG_RE, text, ">")  # tags first, then entities, so "&lt;3" becomes "<3", not a tag
     text = html.unescape(text)
     return _WHITESPACE_RE.sub(" ", text).strip()
+
+
+def _blank_markup_starts(text: str) -> str:
+    """Replace with a space each "<" that starts, or could start, a tag, comment or script block.
+
+    Markup needs a ">" after its "<". A "<" directly after a tag name counts too, because blanking
+    it puts a space after that name ("<a<b>" would become the tag "<a b>"). Plain-text forms such
+    as "<3", "<http://x.com>" and "<john@x.com>" are left alone.
+    """
+    blanked: set[int] = set()
+    for m in reversed(list(_MARKUP_START_RE.finditer(text, 0, text.rfind(">") + 1))):
+        if m.group(0) == "<!" or m.group(1) or (m.group(2) and m.end() in blanked):
+            blanked.add(m.start())
+    if not blanked:
+        return text
+    chars = list(text)
+    for i in blanked:
+        chars[i] = " "
+    return "".join(chars)
+
+
+def _neutralize(text: str) -> str:
+    """Make text stable under _clean_once by blanking single characters, in linear time.
+
+    Used only when clean_text hits its pass limit. Each "&" that still starts an entity becomes a
+    space, then so does each "<" that still starts markup. Everything else is kept, including
+    plain "&", "<3" and URLs. Text that is already stable comes back unchanged.
+    """
+    text = _CHARREF_RE.sub(lambda m: m[0] if html.unescape(m[0]) == m[0] else " " + m[0][1:], text)
+    text = _WHITESPACE_RE.sub(" ", _blank_markup_starts(text)).strip()
+    if _clean_once(text) != text:  # safety net (e.g. "<ſcript>" blocks): with no "<" left, no markup can remain
+        text = _WHITESPACE_RE.sub(" ", text.replace("<", " ")).strip()
+    return text
 
 
 def clean_text(text) -> str:
@@ -49,12 +124,14 @@ def clean_text(text) -> str:
     text = str(text)
     # Repeat until nothing changes, so cleaning twice gives the same result as cleaning once,
     # even for escaped markup such as "&lt;b&gt;" (which only becomes a tag after unescaping).
-    # Every pass that changes the text makes it shorter or only normalises whitespace, so this ends.
-    while True:
+    # Allow up to _MAX_CLEAN_PASSES changing passes plus one pass that confirms nothing changes.
+    for _ in range(_MAX_CLEAN_PASSES + 1):
         cleaned = _clean_once(text)
         if cleaned == text:
             return cleaned
         text = cleaned
+    # Still changing (crafted, deeply nested input): stop here and blank what is left instead.
+    return _neutralize(text)
 
 
 def extract_urls(text) -> list[str]:
